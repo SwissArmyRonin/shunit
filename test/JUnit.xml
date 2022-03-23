@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite errors="1" failures="0" hostname="ip-10-78-52-38" name=".vscode" tests="1" time="310.0" timestamp="2001-12-31T12:00:00">
+	<properties>
+		<property name="OLDPWD" value="/home/qmxh/projects" />
+	</properties>
+	<testcase classname=".vscode/extensions.json" name="extensions.json" time="310.0">
+		<error message="exit code: 2" type="non_zero_exit">
+			<![CDATA[_=/usr/bin/printenv
+OLDPWD=/home/qmxh/projects
+| [no origin] master|empty-repository ≠10 |
+qmxh@ip-10-78-52-38:~/projects/shunit$]]>
+		</error>
+	</testcase>
+	<system-out>
+		<![CDATA[XDG_DATA_DIRS=/usr/local/share:/usr/share:/var/lib/snapd/desktop
+BROWSER=/home/qmxh/.vscode-server/bin/c722ca6c7eed3d7987c0d5c3df5c45f6b15e77d1/bin/helpers/browser.sh
+PATH=/home/qmxh/.vscode-server/bin/c722ca6c7eed3d7987c0d5c3df5c45f6b15e77d1/bin/remote-cli:/home/qmxh/.local/bin:/home/qmxh/.cargo/bin:/home/qmxh/.nvm/versions/node/v16.13.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/qmxh/.local/bin:/home/qmxh/bin:/home/qmxh/.local/bin:/home/qmxh/bin
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1005/bus
+NVM_BIN=/home/qmxh/.nvm/versions/node/v16.13.2/bin
+TERM_PROGRAM=vscode
+VSCODE_IPC_HOOK_CLI=/run/user/1005/vscode-ipc-9c5a4f1b-499d-41cd-9cca-701ca6b55df8.sock]]>
+	</system-out>
+	<system-err>
+		<![CDATA[_=/usr/bin/printenv
+OLDPWD=/home/qmxh/projects
+| [no origin] master|empty-repository ≠10 |
+qmxh@ip-10-78-52-38:~/projects/shunit$]]>
+	</system-err>
+</testsuite>
