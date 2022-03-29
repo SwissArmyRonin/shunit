@@ -1,10 +1,7 @@
-use std::{env, error, fs, process, time};
-
+use crate::model::*;
 use log::*;
-use model::{Property, TestCase, TestError, TestSuite};
+use std::{env, fs, io, path, process, time};
 use structopt::StructOpt;
-
-use crate::model::Properties;
 
 #[macro_use]
 extern crate yaserde_derive;
@@ -26,7 +23,11 @@ struct Opt {
     #[structopt(short = "t", long = "timestamp")]
     ts: Option<stderrlog::Timestamp>,
 
-    // Test scripts
+    /// An optional target file to write the result to.
+    #[structopt(short = "o", long)]
+    output: Option<String>,
+
+    /// Test scripts.
     scripts: Vec<String>,
 }
 
@@ -43,6 +44,10 @@ fn main() {
         .unwrap();
 
     let mut error_count = 0;
+
+    if opt.scripts.len() == 0 {
+        return;
+    }
 
     let start = time::Instant::now();
     let testcases: Vec<TestCase> = opt
@@ -90,12 +95,23 @@ fn main() {
         ..Default::default()
     };
 
-    info!(
-        "{}",
-        yaserde::ser::to_string_with_config(&testsuite, &yaserde_cfg)
-            .ok()
-            .unwrap()
-    );
+    let out = opt.output;
+
+    let mut out_writer = match out {
+        Some(x) => {
+            let path = path::Path::new(&x);
+            Box::new(fs::File::create(&path).unwrap()) as Box<dyn io::Write>
+        }
+        None => Box::new(io::stdout()) as Box<dyn io::Write>,
+    };
+
+    let output = yaserde::ser::to_string_with_config(&testsuite, &yaserde_cfg)
+        .ok()
+        .unwrap();
+
+    out_writer
+        .write(output.as_bytes())
+        .expect("Failed to output test result");
 }
 
 /// Run a test script and output a `TestCase`object with the result.
@@ -141,42 +157,17 @@ fn run_script(script_name: &str) -> Result<TestCase, Box<dyn std::error::Error>>
 
 #[cfg(test)]
 mod test {
-    use log::info;
-
     use crate::run_script;
 
     #[test]
     fn run_failing_script() {
         let result = run_script("./test/bad_apple.sh").expect("Should return a TestCase");
         assert!(result.error.is_some());
-        println!("{:?}", result);
     }
 
     #[test]
     fn run_ok_script() {
         let result = run_script("./test/im_ok.sh").expect("Should return a TestCase");
         assert!(result.error.is_none());
-        println!("{:?}", result);
     }
-
-    // #[test]
-    // fn test_serialization() {
-    //     use std::fs;
-    //     use yaserde::de::from_str;
-    //     let filename = "test/JUnit.xml";
-    //     let content = fs::read_to_string(filename).expect("something went wrong reading the file");
-    //     let junit_result: TestSuite = from_str(&content).unwrap();
-
-    //     let yaserde_cfg = yaserde::ser::Config {
-    //         perform_indent: true,
-    //         ..Default::default()
-    //     };
-
-    //     debug!(
-    //         "{}",
-    //         yaserde::ser::to_string_with_config(&junit_result, &yaserde_cfg)
-    //             .ok()
-    //             .unwrap()
-    //     );
-    // }
 }

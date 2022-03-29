@@ -11,3 +11,10 @@ stderrlog = "^0.5"
 structopt = "^0.3"
 yaserde = "^0.7"
 yaserde_derive = "^0.7"
+
+##  7248440 cargo +nightly build -Z build-std=std,panic_abort --target x86_64-unknown-linux-gnu --release
+[profile.release] # Profile optimizes for binary size
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
