@@ -8,11 +8,13 @@ version = "0.1.0"
 
 [dependencies]
 anyhow = "^1.0"
+chrono = "^0.4"
 log = "^0.4"
 stderrlog = "^0.5"
 structopt = "^0.3"
-yaserde = "^0.7"
-yaserde_derive = "^0.7"
+yaserde = "^0.8"
+yaserde_derive = "^0.8"
+nonblock="^0.1"
 
 [dev-dependencies]
 assert_cmd = "^2.0"
@@ -28,6 +30,3 @@ panic = "abort"
 name = "shunit"
 path = "src/main.rs"
 
-[[bin]]
-name = "tst"
-path = "src/tst/main.rs"

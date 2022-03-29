@@ -1,14 +1,25 @@
 use crate::model::*;
 use anyhow::anyhow;
 use anyhow::Result;
-use log::*;
-use std::{env, fs, io, path, process, time};
+use chrono::DateTime;
+use chrono::Utc;
+use nonblock::NonBlockingReader;
+use std::process::Command;
+use std::process::ExitStatus;
+use std::process::Stdio;
+use std::thread;
+use std::time::Duration;
+use std::{env, fs, io, path, time};
 use structopt::StructOpt;
 
 #[macro_use]
 extern crate yaserde_derive;
 
 mod model;
+
+type LogLine = (DateTime<Utc>, String);
+
+type ScriptResult = anyhow::Result<(ExitStatus, Vec<LogLine>, Vec<LogLine>)>;
 
 #[derive(StructOpt, Debug)]
 #[structopt()]
@@ -35,6 +46,7 @@ struct Opt {
 
 fn main() -> Result<()> {
     let opt = Opt::from_args();
+    let script_count = opt.scripts.len() as u32;
 
     stderrlog::new()
         .module(module_path!())
@@ -44,47 +56,87 @@ fn main() -> Result<()> {
         .init()?;
 
     let mut error_count = 0;
+    let mut failure_count = 0;
 
-    if opt.scripts.len() == 0 {
+    if opt.scripts.is_empty() {
         return Ok(());
     }
 
     let start = time::Instant::now();
-    let testcases: Vec<TestCase> = opt
-        .scripts
-        .iter()
-        .map(|script_name| run_script(script_name))
-        .filter(|res| match res {
-            Ok(_) => true,
-            Err(err) => {
-                error_count += 1;
-                error!("Failed to process a script: {:?}", err);
-                false
-            }
-        })
-        .map(|tc| tc.unwrap())
-        .collect();
-    let duration = start.elapsed();
 
-    let failure_count = testcases
-        .iter()
-        .map(|tc| match tc.error {
-            Some(_) => 1,
-            None => 0,
-        })
-        .fold(0, |acc, elem| acc + elem);
+    let mut stdout_messages: Vec<LogLine> = vec![];
+    let mut stderr_messages: Vec<LogLine> = vec![];
+    let mut testcases: Vec<TestCase> = vec![];
+
+    for name in opt.scripts {
+        let absolute_path = fs::canonicalize(&name)?;
+        let classname = absolute_path
+            .into_os_string()
+            .into_string()
+            .map_err(|os_string| {
+                anyhow!("Unable to determine the absolute path for {:?}", os_string)
+            })?;
+
+        let duration = start.elapsed();
+        let result = run_script(&name[..]);
+        let time = duration.as_secs_f32();
+
+        let error = match result {
+            Ok((exit_code, stdout, stderr)) => {
+                stdout_messages.extend(stdout.iter().cloned());
+                stderr_messages.extend(stderr.iter().cloned());
+                if exit_code.success() {
+                    None
+                } else {
+                    failure_count += 1;
+                    let body = join_and_sort(join_log_lines(&stdout), join_log_lines(&stderr));
+                    let body: Vec<String> = body.into_iter().map(|line| line.1).collect();
+                    let body = body.concat();
+                    Some(TestError {
+                        message: format!("Non-zero exit-code: {}", exit_code.code().unwrap_or(-1)),
+                        error_type: String::from("Assertion failed"),
+                        body,
+                    })
+                }
+            }
+            Err(error) => {
+                error_count += 1;
+                Some(TestError {
+                    message: error.to_string(),
+                    error_type: String::from("IO error"),
+                    body: String::new(),
+                })
+            }
+        };
+
+        let testcase = TestCase {
+            classname,
+            name,
+            time,
+            error,
+        };
+
+        testcases.push(testcase);
+    }
+
+    let duration = start.elapsed();
 
     let properties: Vec<Property> = env::vars()
         .map(|(name, value)| Property { name, value })
         .collect();
+
+    let system_out: Vec<String> = stdout_messages.into_iter().map(|line| line.1).collect();
+    let system_err: Vec<String> = stderr_messages.into_iter().map(|line| line.1).collect();
 
     let testsuite = TestSuite {
         testcases,
         errors: error_count,
         failures: failure_count,
         time: duration.as_secs_f32(),
-        tests: opt.scripts.len() as u32,
-        name: env::var("PWD").unwrap_or("Unknown".to_string()),
+        tests: script_count,
+        system_out: system_out.concat(),
+        system_err: system_err.concat(),
+        name: env::var("PWD").unwrap_or_else(|_| "Unknown".to_string()),
         properties: Properties { properties },
         ..Default::default()
     };
@@ -114,71 +166,122 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run a test script and output a `TestCase`object with the result.
-fn run_script(script_name: &str) -> Result<TestCase> {
-    let absolute_path = fs::canonicalize(script_name)?;
-    let start = time::Instant::now();
-    let output = process::Command::new(script_name).output();
-    let duration = start.elapsed();
-    let text_output;
+/// Merge two log streams and sort the contents,
+fn join_and_sort(stdout: Vec<LogLine>, stderr: Vec<LogLine>) -> Vec<LogLine> {
+    // let mut result: Vec<LogLine> = vec![];
+    // result.extend(stdout.iter().cloned());
+    // result.extend(stderr.iter().cloned());
+    // result.sort_by(|a, b| a.0.cmp(&b.0));
+    // result
 
-    let error = match output {
-        Ok(result) => {
-            text_output = std::str::from_utf8(result.stderr.as_slice())
-                .unwrap_or("Unable to parse handler output");
-            let code = result.status.code().unwrap_or(-1);
-            match result.status.success() {
-                true => None,
-                false => Some(TestError {
-                    body: text_output.to_string(),
-                    message: format!("Exit code: {code}"),
-                    error_type: "non_zero_exit".to_string(),
-                }),
-            }
-        }
-        Err(error) => Some(TestError {
-            body: format!("{:?}", error),
-            message: format!("{:?}", error),
-            error_type: "failed_to_run".to_string(),
-        }),
-    };
-
-    let classname = absolute_path
-        .into_os_string()
-        .into_string()
-        .map_err(|os_string| {
-            anyhow!("Unable to determine the absolute path for {:?}", os_string)
-        })?;
-
-    let name = script_name.to_string();
-    let time = duration.as_secs_f32();
-
-    Ok(TestCase {
-        classname,
-        name,
-        time,
-        error,
-    })
+    let mut result = [stdout[..].as_ref(), stderr[..].as_ref()].concat();
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    result
 }
 
-// #[cfg(test)]
-// mod test {
-//     use anyhow::Result;
-//     use assert_cmd::Command;
-//     use log::debug;
-//     use std::sync::Once;
-//
-//     use crate::run_script;
-//
-//     static INIT: Once = Once::new();
-//
-//     pub fn setup() {
-//         INIT.call_once(|| {
-//             stderrlog::new()
-//                 .module(module_path!())
-//                 .verbosity(5)
-//                 .init()
-//                 .unwrap();
-//         });
-//     }
-// }
+/**
+Join log messages so there is one message per line ending with a new line.
+
+Log messages are intereleved so if a line was sliced into two messages, they become a single message,
+with the timestamp from the first message.
+
+- `messages` a vector of log messages and timestamps sorted in ascending order.
+*/
+fn join_log_lines(messages: &[(DateTime<Utc>, String)]) -> Vec<LogLine> {
+    let mut joined_messages: Vec<LogLine> = vec![];
+    let mut line: String = String::new();
+    let mut first_ts: Option<DateTime<Utc>> = None;
+
+    for (index, (ts, message)) in messages.iter().enumerate() {
+        line.push_str(message);
+        if first_ts.is_none() {
+            first_ts = Some(*ts);
+        }
+        if message.ends_with('\n') || index == (messages.len() - 1) {
+            joined_messages.push((first_ts.unwrap(), line));
+            first_ts = None;
+            line = String::new();
+        }
+    }
+
+    joined_messages
+}
+
+fn run_script(program: &str) -> ScriptResult {
+    let mut child = Command::new(program)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("No stdout handle?"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("No stdout handle?"))?;
+    let mut out_reader = NonBlockingReader::from_fd(stdout)?;
+    let mut err_reader = NonBlockingReader::from_fd(stderr)?;
+    let mut stdout_vector: Vec<LogLine> = vec![];
+    let mut stderr_vector: Vec<LogLine> = vec![];
+
+    while !(out_reader.is_eof() && err_reader.is_eof()) {
+        let now: DateTime<Utc> = Utc::now();
+
+        let mut buffer = String::new();
+        out_reader.read_available_to_string(&mut buffer).unwrap();
+        if !buffer.is_empty() {
+            print!("{buffer}");
+            stdout_vector.push((now, buffer));
+        }
+        let mut buffer = String::new();
+        err_reader.read_available_to_string(&mut buffer).unwrap();
+        if !buffer.is_empty() {
+            eprint!("{buffer}");
+            stderr_vector.push((now, buffer));
+        }
+
+        thread::sleep(Duration::from_millis(100)); // Don't burn all the CPU
+    }
+
+    let exit_code = child.wait()?;
+
+    Ok((exit_code, stdout_vector, stderr_vector))
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{join_log_lines, LogLine};
+    use chrono::DateTime;
+    use std::{str::FromStr, sync::Once};
+
+    static INIT: Once = Once::new();
+
+    pub fn setup() {
+        INIT.call_once(|| {
+            stderrlog::new()
+                .module(module_path!())
+                .verbosity(5)
+                .init()
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn test_join_log_lines() {
+        setup();
+        let ts1 = DateTime::from_str("2022-04-03 10:13:48 UTC").unwrap();
+        let ts2 = DateTime::from_str("2022-04-03 10:13:49 UTC").unwrap();
+        let ts3 = DateTime::from_str("2022-04-03 10:13:50 UTC").unwrap();
+        let messages: Vec<LogLine> = vec![
+            (ts1, "A".to_string()),
+            (ts2, "B\n".to_string()),
+            (ts3, "C".to_string()),
+        ];
+        let joined = join_log_lines(&messages);
+        assert_eq!(joined.len(), 2);
+        assert_eq!(joined[0], (ts1, "AB\n".to_string()));
+        assert_eq!(joined[1], (ts3, "C".to_string()));
+    }
+}
