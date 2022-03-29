@@ -1,4 +1,6 @@
 use crate::model::*;
+use anyhow::anyhow;
+use anyhow::Result;
 use log::*;
 use std::{env, fs, io, path, process, time};
 use structopt::StructOpt;
@@ -31,22 +33,20 @@ struct Opt {
     scripts: Vec<String>,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let opt = Opt::from_args();
 
     stderrlog::new()
         .module(module_path!())
-        .module("irs") // Log the lib as well
         .quiet(opt.quiet)
         .verbosity(opt.verbose)
         .timestamp(opt.ts.unwrap_or(stderrlog::Timestamp::Off))
-        .init()
-        .unwrap();
+        .init()?;
 
     let mut error_count = 0;
 
     if opt.scripts.len() == 0 {
-        return;
+        return Ok(());
     }
 
     let start = time::Instant::now();
@@ -72,8 +72,7 @@ fn main() {
             Some(_) => 1,
             None => 0,
         })
-        .reduce(|acc, elem| acc + elem)
-        .unwrap_or(0);
+        .fold(0, |acc, elem| acc + elem);
 
     let properties: Vec<Property> = env::vars()
         .map(|(name, value)| Property { name, value })
@@ -106,16 +105,17 @@ fn main() {
     };
 
     let output = yaserde::ser::to_string_with_config(&testsuite, &yaserde_cfg)
-        .ok()
-        .unwrap();
+        .map_err(|msg| anyhow!(msg))?;
 
     out_writer
         .write(output.as_bytes())
-        .expect("Failed to output test result");
+        .map_err(|err| anyhow!("Failed to output test result: {:?}", err))?;
+
+    Ok(())
 }
 
 /// Run a test script and output a `TestCase`object with the result.
-fn run_script(script_name: &str) -> Result<TestCase, Box<dyn std::error::Error>> {
+fn run_script(script_name: &str) -> Result<TestCase> {
     let absolute_path = fs::canonicalize(script_name)?;
     let start = time::Instant::now();
     let output = process::Command::new(script_name).output();
@@ -143,7 +143,13 @@ fn run_script(script_name: &str) -> Result<TestCase, Box<dyn std::error::Error>>
         }),
     };
 
-    let classname = absolute_path.into_os_string().into_string().unwrap();
+    let classname = absolute_path
+        .into_os_string()
+        .into_string()
+        .map_err(|os_string| {
+            anyhow!("Unable to determine the absolute path for {:?}", os_string)
+        })?;
+
     let name = script_name.to_string();
     let time = duration.as_secs_f32();
 
@@ -155,19 +161,24 @@ fn run_script(script_name: &str) -> Result<TestCase, Box<dyn std::error::Error>>
     })
 }
 
-#[cfg(test)]
-mod test {
-    use crate::run_script;
-
-    #[test]
-    fn run_failing_script() {
-        let result = run_script("./test/bad_apple.sh").expect("Should return a TestCase");
-        assert!(result.error.is_some());
-    }
-
-    #[test]
-    fn run_ok_script() {
-        let result = run_script("./test/im_ok.sh").expect("Should return a TestCase");
-        assert!(result.error.is_none());
-    }
-}
+// #[cfg(test)]
+// mod test {
+//     use anyhow::Result;
+//     use assert_cmd::Command;
+//     use log::debug;
+//     use std::sync::Once;
+//
+//     use crate::run_script;
+//
+//     static INIT: Once = Once::new();
+//
+//     pub fn setup() {
+//         INIT.call_once(|| {
+//             stderrlog::new()
+//                 .module(module_path!())
+//                 .verbosity(5)
+//                 .init()
+//                 .unwrap();
+//         });
+//     }
+// }
