@@ -177,7 +177,7 @@ fn join_and_sort(stdout: Vec<LogLine>, stderr: Vec<LogLine>) -> Vec<LogLine> {
 /**
 Join log messages so there is one message per line ending with a new line.
 
-Log messages are intereleved so if a line was sliced into two messages, they become a single message,
+Log messages are interleaved so if a line was sliced into two messages, they become a single message,
 with the timestamp from the first message.
 
 - `messages` a vector of log messages and timestamps sorted in ascending order.
