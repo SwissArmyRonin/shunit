@@ -1,39 +1,42 @@
 use crate::model::*;
-use anyhow::anyhow;
-use anyhow::Result;
 use chrono::DateTime;
 use chrono::Utc;
-use std::process::ExitStatus;
-use std::process::Stdio;
-use std::{env, fs, io, path, time};
+use std::{env, fs, io, path, process, time};
 use structopt::StructOpt;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 #[macro_use]
+extern crate anyhow;
+
+#[macro_use]
 extern crate yaserde_derive;
+
+#[cfg(windows)]
+const LINE_ENDING: &str = "\r\n";
+#[cfg(not(windows))]
+const LINE_ENDING: &str = "\n";
 
 mod model;
 
 type LogLine = (DateTime<Utc>, String);
 
-type ScriptResult = anyhow::Result<(ExitStatus, Vec<LogLine>, Vec<LogLine>)>;
+type ScriptResult = anyhow::Result<(process::ExitStatus, Vec<LogLine>, Vec<LogLine>)>;
 
 #[derive(StructOpt, Debug)]
 #[structopt()]
 struct Opt {
-    /// Silence all output
-    #[structopt(short = "q", long)]
-    quiet: bool,
+    // /// Silence all output
+    // #[structopt(short = "q", long)]
+    // quiet: bool,
 
-    /// Verbose mode (-v, -vv, -vvv, -vvvv). The levels are warnings, informational, debugging, and trace message.
-    #[structopt(short = "v", long, parse(from_occurrences))]
-    verbose: usize,
+    // /// Verbose mode (-v, -vv, -vvv, -vvvv). The levels are warnings, informational, debugging, and trace message.
+    // #[structopt(short = "v", long, parse(from_occurrences))]
+    // verbose: usize,
 
-    /// Timestamp (sec, ms, ns, none)
-    #[structopt(short = "t", long = "timestamp")]
-    ts: Option<stderrlog::Timestamp>,
-
+    // /// Timestamp (sec, ms, ns, none)
+    // #[structopt(short = "t", long = "timestamp")]
+    // ts: Option<stderrlog::Timestamp>,
     /// An optional target file to write the result to.
     #[structopt(short = "o", long)]
     output: Option<String>,
@@ -43,22 +46,22 @@ struct Opt {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let opt = Opt::from_args();
     let script_count = opt.scripts.len() as u32;
 
-    stderrlog::new()
-        .module(module_path!())
-        .quiet(opt.quiet)
-        .verbosity(opt.verbose)
-        .timestamp(opt.ts.unwrap_or(stderrlog::Timestamp::Off))
-        .init()?;
+    // let _ = stderrlog::new()
+    //     .module(module_path!())
+    //     .quiet(opt.quiet)
+    //     .verbosity(opt.verbose)
+    //     .timestamp(opt.ts.unwrap_or(stderrlog::Timestamp::Off))
+    //     .init();
 
     let mut error_count = 0;
     let mut failure_count = 0;
 
     if opt.scripts.is_empty() {
-        return Ok(());
+        return;
     }
 
     let start = time::Instant::now();
@@ -68,13 +71,8 @@ async fn main() -> Result<()> {
     let mut testcases: Vec<TestCase> = vec![];
 
     for name in opt.scripts {
-        let absolute_path = fs::canonicalize(&name)?;
-        let classname = absolute_path
-            .into_os_string()
-            .into_string()
-            .map_err(|os_string| {
-                anyhow!("Unable to determine the absolute path for {:?}", os_string)
-            })?;
+        let absolute_path = fs::canonicalize(&name).unwrap();
+        let classname = absolute_path.into_os_string().into_string().unwrap();
 
         let duration = start.elapsed();
         let result = run_script(&name[..]).await;
@@ -90,7 +88,7 @@ async fn main() -> Result<()> {
                     failure_count += 1;
                     let body = join_and_sort(join_log_lines(&stdout), join_log_lines(&stderr));
                     let body: Vec<String> = body.into_iter().map(|line| line.1).collect();
-                    let body = body.concat();
+                    let body = body.join(LINE_ENDING);
                     Some(TestError {
                         message: format!("Non-zero exit-code: {}", exit_code.code().unwrap_or(-1)),
                         error_type: String::from("Assertion failed"),
@@ -133,8 +131,8 @@ async fn main() -> Result<()> {
         failures: failure_count,
         time: duration.as_secs_f32(),
         tests: script_count,
-        system_out: system_out.concat(),
-        system_err: system_err.concat(),
+        system_out: system_out.join(LINE_ENDING),
+        system_err: system_err.join(LINE_ENDING),
         name: env::var("PWD").unwrap_or_else(|_| "Unknown".to_string()),
         properties: Properties { properties },
         ..Default::default()
@@ -145,24 +143,21 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let out = opt.output;
+    // If an output file is not provided, send output to std out
+    let mut out_writer: Box<dyn io::Write> = opt.output.map_or(Box::new(io::stdout()), |p| {
+        Box::new(fs::File::create(&path::Path::new(&p)).unwrap())
+    });
 
-    let mut out_writer = match out {
-        Some(x) => {
-            let path = path::Path::new(&x);
-            Box::new(fs::File::create(&path).unwrap()) as Box<dyn io::Write>
-        }
-        None => Box::new(io::stdout()) as Box<dyn io::Write>,
-    };
-
-    let output = yaserde::ser::to_string_with_config(&testsuite, &yaserde_cfg)
-        .map_err(|msg| anyhow!(msg))?;
+    let output = yaserde::ser::to_string_with_config(&testsuite, &yaserde_cfg).unwrap();
 
     out_writer
         .write(output.as_bytes())
-        .map_err(|err| anyhow!("Failed to output test result: {:?}", err))?;
+        .map_err(|err| anyhow!("Failed to output test result: {:?}", err))
+        .unwrap();
 
-    Ok(())
+    if error_count > 0 || failure_count > 0 {
+        process::exit(1);
+    }
 }
 
 /// Merge two log streams and sort the contents,
@@ -206,8 +201,8 @@ fn join_log_lines(messages: &[(DateTime<Utc>, String)]) -> Vec<LogLine> {
 // https://stackoverflow.com/questions/34611742/how-do-i-read-the-output-of-a-child-process-without-blocking-in-rust
 async fn run_script(program: &str) -> ScriptResult {
     let mut child = Command::new(program)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::piped())
         .spawn()?;
 
     let stdout = child
@@ -258,11 +253,11 @@ mod test {
 
     pub fn setup() {
         INIT.call_once(|| {
-            stderrlog::new()
-                .module(module_path!())
-                .verbosity(5)
-                .init()
-                .unwrap();
+            // stderrlog::new()
+            //     .module(module_path!())
+            //     .verbosity(5)
+            //     .init()
+            //     .unwrap();
         });
     }
 

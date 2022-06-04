@@ -1,6 +1,7 @@
 # README
 
-`shunit` runs a list of shell scripts and outputs the results in JUnit format for easy use in CI/CD systems.
+`shunit` runs a list of shell scripts and outputs the results in JUnit format 
+for easy use in CI/CD systems.
 
 ## Usage
 
@@ -24,3 +25,18 @@ OPTIONS:
 ARGS:
     <scripts>...    Test scripts
 ```
+
+## Example
+
+To run the tests in the [test](test) folder and generate an JUnit compatible XML
+output, run:
+
+```shell
+shunit -o shunit.xml test/*
+```
+
+This will generate a JUnit compatible output file called shunit.xml. The file 
+glob will expand to every script in the test directory, so the final suite will
+contain the results of running all 4 files (including the one that isn't a script).
+
+_The exit code from shunit is 0 if all tests succeeded, and 1 otherwise._

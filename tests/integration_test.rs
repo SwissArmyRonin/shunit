@@ -11,7 +11,7 @@ fn run_ok_script() -> Result<()> {
 #[test]
 fn run_fail_script() -> Result<()> {
     let mut cmd = Command::cargo_bin("shunit")?;
-    cmd.args(&["./test/bad_apple.sh"]).assert().success();
+    cmd.args(&["./test/bad_apple.sh"]).assert().failure();
     Ok(())
 }
 
@@ -22,6 +22,6 @@ fn run_a_suite() -> Result<()> {
     cmd.arg("./test/im_ok.sh");
     cmd.arg("./test/JUnit.xml");
     cmd.arg("./test/slow.sh");
-    cmd.assert().success();
+    cmd.assert().failure();
     Ok(())
 }
